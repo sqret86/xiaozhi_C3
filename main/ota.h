@@ -49,6 +49,7 @@ private:
     int activation_timeout_ms_ = 30000;
 
     bool Upgrade(const std::string& firmware_url);
+    void FetchOfficialConfig();  // 从官方服务器获取 MQTT/WebSocket/激活配置
     std::function<void(int progress, size_t speed)> upgrade_callback_;
     std::vector<int> ParseVersion(const std::string& version);
     bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion);

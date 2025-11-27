@@ -98,9 +98,19 @@ bool Ota::CheckVersion() {
 
     auto http = std::unique_ptr<Http>(SetupHttp());
 
+    // GitHub Pages 只支持 GET 请求，不支持 POST
+    // 如果 OTA URL 是 GitHub Pages（github.io），强制使用 GET
+    // 否则保持原有逻辑（POST 带设备信息）
     std::string data = board.GetJson();
-    std::string method = data.length() > 0 ? "POST" : "GET";
-    http->SetContent(std::move(data));
+    std::string method;
+    if (url.find("github.io") != std::string::npos) {
+        // GitHub Pages 静态托管，只能用 GET
+        method = "GET";
+    } else {
+        // 官方服务器或其他动态服务，可以用 POST 发送设备信息
+        method = data.length() > 0 ? "POST" : "GET";
+        http->SetContent(std::move(data));
+    }
 
     if (!http->Open(method, url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
@@ -248,7 +258,123 @@ bool Ota::CheckVersion() {
     }
 
     cJSON_Delete(root);
+
+    // 如果使用 GitHub Pages 且没有获取到 mqtt/websocket/activation 配置，
+    // 额外请求官方服务器获取这些配置（用于设备激活和对话功能）
+    if (url.find("github.io") != std::string::npos && 
+        (!has_mqtt_config_ || !has_websocket_config_ || !has_activation_code_)) {
+        ESP_LOGI(TAG, "GitHub Pages OTA detected, fetching config from official server...");
+        FetchOfficialConfig();
+    }
+
     return true;
+}
+
+void Ota::FetchOfficialConfig() {
+    const std::string official_url = "https://api.tenclass.net/xiaozhi/ota/";
+    auto& board = Board::GetInstance();
+    
+    auto http = std::unique_ptr<Http>(SetupHttp());
+    std::string data = board.GetJson();
+    http->SetContent(std::move(data));
+    
+    if (!http->Open("POST", official_url)) {
+        ESP_LOGE(TAG, "Failed to connect to official server");
+        return;
+    }
+    
+    if (http->GetStatusCode() != 200) {
+        ESP_LOGE(TAG, "Official server returned status code: %d", http->GetStatusCode());
+        return;
+    }
+    
+    data = http->ReadAll();
+    http->Close();
+    
+    cJSON *root = cJSON_Parse(data.c_str());
+    if (root == NULL) {
+        ESP_LOGE(TAG, "Failed to parse official server response");
+        return;
+    }
+    
+    // 解析 activation 配置
+    cJSON *activation = cJSON_GetObjectItem(root, "activation");
+    if (cJSON_IsObject(activation)) {
+        cJSON* message = cJSON_GetObjectItem(activation, "message");
+        if (cJSON_IsString(message)) {
+            activation_message_ = message->valuestring;
+        }
+        cJSON* code = cJSON_GetObjectItem(activation, "code");
+        if (cJSON_IsString(code)) {
+            activation_code_ = code->valuestring;
+            has_activation_code_ = true;
+        }
+        cJSON* challenge = cJSON_GetObjectItem(activation, "challenge");
+        if (cJSON_IsString(challenge)) {
+            activation_challenge_ = challenge->valuestring;
+            has_activation_challenge_ = true;
+        }
+        cJSON* timeout_ms = cJSON_GetObjectItem(activation, "timeout_ms");
+        if (cJSON_IsNumber(timeout_ms)) {
+            activation_timeout_ms_ = timeout_ms->valueint;
+        }
+    }
+    
+    // 解析 mqtt 配置
+    cJSON *mqtt = cJSON_GetObjectItem(root, "mqtt");
+    if (cJSON_IsObject(mqtt)) {
+        Settings settings("mqtt", true);
+        cJSON *item = NULL;
+        cJSON_ArrayForEach(item, mqtt) {
+            if (cJSON_IsString(item)) {
+                settings.SetString(item->string, item->valuestring);
+            } else if (cJSON_IsNumber(item)) {
+                settings.SetInt(item->string, item->valueint);
+            }
+        }
+        has_mqtt_config_ = true;
+        ESP_LOGI(TAG, "MQTT config fetched from official server");
+    }
+    
+    // 解析 websocket 配置
+    cJSON *websocket = cJSON_GetObjectItem(root, "websocket");
+    if (cJSON_IsObject(websocket)) {
+        Settings settings("websocket", true);
+        cJSON *item = NULL;
+        cJSON_ArrayForEach(item, websocket) {
+            if (cJSON_IsString(item)) {
+                settings.SetString(item->string, item->valuestring);
+            } else if (cJSON_IsNumber(item)) {
+                settings.SetInt(item->string, item->valueint);
+            }
+        }
+        has_websocket_config_ = true;
+        ESP_LOGI(TAG, "WebSocket config fetched from official server");
+    }
+    
+    // 解析 server_time 配置
+    cJSON *server_time = cJSON_GetObjectItem(root, "server_time");
+    if (cJSON_IsObject(server_time)) {
+        cJSON *timestamp = cJSON_GetObjectItem(server_time, "timestamp");
+        cJSON *timezone_offset = cJSON_GetObjectItem(server_time, "timezone_offset");
+        
+        if (cJSON_IsNumber(timestamp)) {
+            struct timeval tv;
+            double ts = timestamp->valuedouble;
+            
+            if (cJSON_IsNumber(timezone_offset)) {
+                ts += (timezone_offset->valueint * 60 * 1000);
+            }
+            
+            tv.tv_sec = (time_t)(ts / 1000);
+            tv.tv_usec = (suseconds_t)((long long)ts % 1000) * 1000;
+            settimeofday(&tv, NULL);
+            has_server_time_ = true;
+            ESP_LOGI(TAG, "Server time synced from official server");
+        }
+    }
+    
+    cJSON_Delete(root);
 }
 
 void Ota::MarkCurrentVersionValid() {
