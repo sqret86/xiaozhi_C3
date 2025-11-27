@@ -12,6 +12,9 @@
 #include <esp_app_format.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
+#include <esp_http_client.h>
+#include <esp_crt_bundle.h>
+#include <esp_timer.h>
 #ifdef SOC_HMAC_SUPPORTED
 #include <esp_hmac.h>
 #endif
@@ -410,56 +413,51 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     bool image_header_checked = false;
     std::string image_header;
 
-    // GitHub Releases 会返回 302 重定向，需要手动处理
-    std::string actual_url = firmware_url;
-    int max_redirects = 5;
+    // 直接使用 esp_http_client 并启用自动重定向（GitHub Releases 会 302 重定向）
+    esp_http_client_config_t config = {};
+    config.url = firmware_url.c_str();
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.timeout_ms = 30000;
+    config.max_redirection_count = 10;  // 启用自动重定向，最多 10 次
     
-    auto http = std::unique_ptr<Http>(Board::GetInstance().CreateHttp());
-    
-    for (int redirect_count = 0; redirect_count < max_redirects; redirect_count++) {
-        if (!http->Open("GET", actual_url)) {
-            ESP_LOGE(TAG, "Failed to open HTTP connection");
-            return false;
-        }
-        
-        int status_code = http->GetStatusCode();
-        
-        // 处理重定向 (301, 302, 303, 307, 308)
-        if (status_code >= 301 && status_code <= 308 && status_code != 304) {
-            std::string location = http->GetResponseHeader("Location");
-            if (location.empty()) {
-                ESP_LOGE(TAG, "Redirect without Location header");
-                return false;
-            }
-            ESP_LOGI(TAG, "Redirecting to: %s", location.c_str());
-            http->Close();
-            actual_url = location;
-            http = std::unique_ptr<Http>(Board::GetInstance().CreateHttp());
-            continue;
-        }
-        
-        if (status_code != 200) {
-            ESP_LOGE(TAG, "Failed to get firmware, status code: %d", status_code);
-            return false;
-        }
-        
-        // 成功获取到 200，跳出循环继续下载
-        break;
-    }
-
-    size_t content_length = http->GetBodyLength();
-    if (content_length == 0) {
-        ESP_LOGE(TAG, "Failed to get content length");
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
         return false;
     }
+    
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    int64_t content_length = esp_http_client_fetch_headers(client);
+    int status_code = esp_http_client_get_status_code(client);
+    
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "Failed to get firmware, status code: %d", status_code);
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    if (content_length <= 0) {
+        ESP_LOGE(TAG, "Failed to get content length");
+        esp_http_client_cleanup(client);
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Firmware size: %lld bytes", content_length);
 
     char buffer[512];
     size_t total_read = 0, recent_read = 0;
     auto last_calc_time = esp_timer_get_time();
     while (true) {
-        int ret = http->Read(buffer, sizeof(buffer));
+        int ret = esp_http_client_read(client, buffer, sizeof(buffer));
         if (ret < 0) {
             ESP_LOGE(TAG, "Failed to read HTTP data: %s", esp_err_to_name(ret));
+            esp_http_client_cleanup(client);
             return false;
         }
 
@@ -467,8 +465,8 @@ bool Ota::Upgrade(const std::string& firmware_url) {
         recent_read += ret;
         total_read += ret;
         if (esp_timer_get_time() - last_calc_time >= 1000000 || ret == 0) {
-            size_t progress = total_read * 100 / content_length;
-            ESP_LOGI(TAG, "Progress: %u%% (%u/%u), Speed: %uB/s", progress, total_read, content_length, recent_read);
+            int progress = (int)(total_read * 100 / content_length);
+            ESP_LOGI(TAG, "Progress: %d%% (%zu/%lld), Speed: %zuB/s", progress, total_read, content_length, recent_read);
             if (upgrade_callback_) {
                 upgrade_callback_(progress, recent_read);
             }
@@ -490,29 +488,51 @@ bool Ota::Upgrade(const std::string& firmware_url) {
                 auto current_version = esp_app_get_description()->version;
                 if (memcmp(new_app_info.version, current_version, sizeof(new_app_info.version)) == 0) {
                     ESP_LOGE(TAG, "Firmware version is the same, skipping upgrade");
+                    esp_http_client_cleanup(client);
                     return false;
                 }
 
                 if (esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle)) {
                     esp_ota_abort(update_handle);
                     ESP_LOGE(TAG, "Failed to begin OTA");
+                    esp_http_client_cleanup(client);
+                    return false;
+                }
+
+                // 写入已缓存的 image_header 数据
+                err = esp_ota_write(update_handle, image_header.data(), image_header.size());
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to write OTA header: %s", esp_err_to_name(err));
+                    esp_ota_abort(update_handle);
+                    esp_http_client_cleanup(client);
                     return false;
                 }
 
                 image_header_checked = true;
                 std::string().swap(image_header);
             }
+            // 头部还没检查完，继续读取下一块数据
+            continue;
         }
-        auto err = esp_ota_write(update_handle, buffer, ret);
+        
+        // 头部已检查完，写入后续数据
+        err = esp_ota_write(update_handle, buffer, ret);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to write OTA data: %s", esp_err_to_name(err));
             esp_ota_abort(update_handle);
+            esp_http_client_cleanup(client);
             return false;
         }
     }
-    http->Close();
+    esp_http_client_cleanup(client);
 
-    esp_err_t err = esp_ota_end(update_handle);
+    // 检查是否成功开始了 OTA（update_handle 是否有效）
+    if (!image_header_checked || update_handle == 0) {
+        ESP_LOGE(TAG, "OTA was not properly started, header check failed");
+        return false;
+    }
+
+    err = esp_ota_end(update_handle);
     if (err != ESP_OK) {
         if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
             ESP_LOGE(TAG, "Image validation failed, image is corrupted");
