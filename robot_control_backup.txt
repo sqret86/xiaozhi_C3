@@ -1,0 +1,28 @@
+## 机器人控制代码备份 - 需要保留到新版本中
+
+### 1. ExtractRobotCommands 方法（提取机器人指令）
+位置：application.cc 约1300-1350行
+
+### 2. SendRobotCommand 方法（发送机器人指令）  
+位置：application.cc 约1350-1400行
+
+### 3. ResetConversation 方法（重置对话，让机器人休息）
+位置：application.cc 约1400-1450行
+
+### 4. 启动时让机器人站起来
+位置：Application::Start() 中，SetDeviceState(kDeviceStateIdle) 之前
+代码：SecondUartUtils::SendStandUp();
+
+### 5. ResetConversation中让机器人休息
+位置：ResetConversation() 方法中
+代码：SecondUartUtils::SendRest();
+
+### 6. 发送TTS文本时提取并发送机器人指令
+位置：Protocol的TTS回调中
+代码：
+std::string cleanedText;
+std::string robotCommand = ExtractRobotCommands(text, cleanedText);
+if (!robotCommand.empty()) {
+    SendRobotCommand(robotCommand);
+}
+

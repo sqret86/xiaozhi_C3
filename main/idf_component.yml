@@ -1,0 +1,45 @@
+## IDF Component Manager Manifest File
+dependencies:
+  # Core components
+  78/esp-wifi-connect: ~2.4.2
+  78/esp-opus-encoder: ~2.3.3
+  78/xiaozhi-fonts: ~1.3.2
+  78/esp-ml307: ~2.2.1
+  
+  # Audio
+  espressif/esp_codec_dev: ~1.3.2
+  espressif/esp-sr: ~2.1.1
+  
+  # Input
+  espressif/button: ~4.1.3
+  
+  # Display (ST7789 is built into ESP-IDF, but we need LVGL support)
+  espressif/esp_lcd_panel_io_additions: ^1.0.1
+  lvgl/lvgl: ~9.2.2
+  esp_lvgl_port: ~2.6.0
+  
+  # IO Expander (PCA9557 is compatible with TCA9554)
+  espressif/esp_io_expander_tca9554: ==2.0.0
+  
+  # Assets
+  espressif/esp_mmap_assets: '>=1.2'
+  
+  # Image and Emoji support
+  espressif2022/image_player: ^1.1.0
+  txp666/otto-emoji-gif-component:
+    version: '*'
+    rules:
+    - if: idf_version >= "5.0"
+  
+  # Robot control (ESP32-C3 specific)
+  lijunru-hub/servo_dog_ctrl:
+    version: ^0.1.6
+    rules:
+    - if: target in [esp32c3]
+  
+  # mDNS
+  espressif/mdns: ^1.4.0
+
+  ## Required IDF version
+  idf:
+    version: '>=5.4.0'
