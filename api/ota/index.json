@@ -1,7 +1,7 @@
 {
   "firmware": {
-    "version": "2.0.8",
-    "url": "https://github.com/sqret86/xiaozhi_C3/releases/download/v2.0.8/xiaozhi.bin",
+    "version": "2.0.9",
+    "url": "https://github.com/sqret86/xiaozhi_C3/releases/download/v2.0.9/xiaozhi.bin",
     "force": 0
   }
 }

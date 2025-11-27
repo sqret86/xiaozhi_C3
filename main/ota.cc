@@ -413,12 +413,13 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     bool image_header_checked = false;
     std::string image_header;
 
-    // 直接使用 esp_http_client 并启用自动重定向（GitHub Releases 会 302 重定向）
+    // GitHub Releases 会返回 302 重定向
+    // 使用 esp_http_client_set_redirection 处理重定向
     esp_http_client_config_t config = {};
     config.url = firmware_url.c_str();
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.timeout_ms = 30000;
-    config.max_redirection_count = 10;  // 启用自动重定向，最多 10 次
+    config.max_redirection_count = 10;
     
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
@@ -426,18 +427,50 @@ bool Ota::Upgrade(const std::string& firmware_url) {
         return false;
     }
     
-    esp_err_t err = esp_http_client_open(client, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
-        esp_http_client_cleanup(client);
-        return false;
+    esp_err_t err = ESP_OK;
+    int64_t content_length = 0;
+    int status_code = 0;
+    int max_redirects = 10;
+    
+    for (int redirect_count = 0; redirect_count < max_redirects; redirect_count++) {
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        content_length = esp_http_client_fetch_headers(client);
+        status_code = esp_http_client_get_status_code(client);
+        
+        ESP_LOGI(TAG, "HTTP status: %d, redirect count: %d", status_code, redirect_count);
+        
+        // 处理重定向
+        if (status_code == 301 || status_code == 302 || status_code == 303 || 
+            status_code == 307 || status_code == 308) {
+            // 使用 ESP-IDF 内置的重定向处理
+            err = esp_http_client_set_redirection(client);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set redirection: %s", esp_err_to_name(err));
+                esp_http_client_cleanup(client);
+                return false;
+            }
+            ESP_LOGI(TAG, "Following redirect...");
+            continue;
+        }
+        
+        if (status_code != 200) {
+            ESP_LOGE(TAG, "Failed to get firmware, status code: %d", status_code);
+            esp_http_client_cleanup(client);
+            return false;
+        }
+        
+        // 成功获取 200，跳出循环
+        break;
     }
     
-    int64_t content_length = esp_http_client_fetch_headers(client);
-    int status_code = esp_http_client_get_status_code(client);
-    
     if (status_code != 200) {
-        ESP_LOGE(TAG, "Failed to get firmware, status code: %d", status_code);
+        ESP_LOGE(TAG, "Failed to get firmware after redirects, status code: %d", status_code);
         esp_http_client_cleanup(client);
         return false;
     }
