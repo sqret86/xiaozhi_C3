@@ -414,23 +414,25 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     std::string image_header;
 
     // GitHub Releases 会返回 302 重定向
-    // 使用 esp_http_client_set_redirection 处理重定向
-    esp_http_client_config_t config = {};
-    config.url = firmware_url.c_str();
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-    config.timeout_ms = 30000;
-    config.max_redirection_count = 10;
-    
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGE(TAG, "Failed to initialize HTTP client");
-        return false;
-    }
-    
+    // 需要手动处理重定向：关闭连接，更新 URL，重新打开
     esp_err_t err = ESP_OK;
     int64_t content_length = 0;
     int status_code = 0;
     int max_redirects = 10;
+    esp_http_client_handle_t client = nullptr;
+    
+    esp_http_client_config_t config = {};
+    config.url = firmware_url.c_str();
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.timeout_ms = 30000;
+    config.buffer_size = 1024;           // 增加接收缓冲区大小
+    config.buffer_size_tx = 1024;        // 增加发送缓冲区大小
+    
+    client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        return false;
+    }
     
     for (int redirect_count = 0; redirect_count < max_redirects; redirect_count++) {
         err = esp_http_client_open(client, 0);
@@ -448,14 +450,17 @@ bool Ota::Upgrade(const std::string& firmware_url) {
         // 处理重定向
         if (status_code == 301 || status_code == 302 || status_code == 303 || 
             status_code == 307 || status_code == 308) {
-            // 使用 ESP-IDF 内置的重定向处理
+            // 先关闭当前连接
+            esp_http_client_close(client);
+            
+            // 使用 ESP-IDF 内置的重定向处理，它会更新 client 内部的 URL
             err = esp_http_client_set_redirection(client);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to set redirection: %s", esp_err_to_name(err));
                 esp_http_client_cleanup(client);
                 return false;
             }
-            ESP_LOGI(TAG, "Following redirect...");
+            ESP_LOGI(TAG, "Following redirect (attempt %d)...", redirect_count + 1);
             continue;
         }
         
