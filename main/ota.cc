@@ -410,15 +410,41 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     bool image_header_checked = false;
     std::string image_header;
 
+    // GitHub Releases 会返回 302 重定向，需要手动处理
+    std::string actual_url = firmware_url;
+    int max_redirects = 5;
+    
     auto http = std::unique_ptr<Http>(Board::GetInstance().CreateHttp());
-    if (!http->Open("GET", firmware_url)) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection");
-        return false;
-    }
-
-    if (http->GetStatusCode() != 200) {
-        ESP_LOGE(TAG, "Failed to get firmware, status code: %d", http->GetStatusCode());
-        return false;
+    
+    for (int redirect_count = 0; redirect_count < max_redirects; redirect_count++) {
+        if (!http->Open("GET", actual_url)) {
+            ESP_LOGE(TAG, "Failed to open HTTP connection");
+            return false;
+        }
+        
+        int status_code = http->GetStatusCode();
+        
+        // 处理重定向 (301, 302, 303, 307, 308)
+        if (status_code >= 301 && status_code <= 308 && status_code != 304) {
+            std::string location = http->GetResponseHeader("Location");
+            if (location.empty()) {
+                ESP_LOGE(TAG, "Redirect without Location header");
+                return false;
+            }
+            ESP_LOGI(TAG, "Redirecting to: %s", location.c_str());
+            http->Close();
+            actual_url = location;
+            http = std::unique_ptr<Http>(Board::GetInstance().CreateHttp());
+            continue;
+        }
+        
+        if (status_code != 200) {
+            ESP_LOGE(TAG, "Failed to get firmware, status code: %d", status_code);
+            return false;
+        }
+        
+        // 成功获取到 200，跳出循环继续下载
+        break;
     }
 
     size_t content_length = http->GetBodyLength();
