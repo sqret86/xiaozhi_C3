@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Xiaozhi C3 OTA API</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        h1 { color: #333; }
+        pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        code { color: #d63384; }
+        .endpoint { background: #e7f5ff; padding: 10px; border-left: 4px solid #339af0; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>🤖 Xiaozhi C3 OTA API</h1>
+    <p>ESP32-C3 固件 OTA 升级服务</p>
+    
+    <h2>API 端点</h2>
+    <div class="endpoint">
+        <strong>GET</strong> <code>/api/ota/</code> 或 <code>/api/ota/index.json</code>
+    </div>
+    
+    <h2>响应示例</h2>
+    <pre>{
+  "firmware": {
+    "version": "2.0.5",
+    "url": "https://github.com/sqret86/xiaozhi_C3/releases/download/v2.0.5/xiaozhi.bin"
+  },
+  "mqtt": {
+    "endpoint": "wss://api.tenclass.net/xiaozhi/mqtt/"
+  },
+  "websocket": {
+    "url": "wss://api.tenclass.net/xiaozhi/v1/"
+  }
+}</pre>
+
+    <h2>当前版本</h2>
+    <p>最新固件版本: <strong>v2.0.5</strong></p>
+    
+    <h2>GitHub 仓库</h2>
+    <p><a href="https://github.com/sqret86/xiaozhi_C3">https://github.com/sqret86/xiaozhi_C3</a></p>
+</body>
+</html>
+

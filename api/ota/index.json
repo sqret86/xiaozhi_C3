@@ -1,0 +1,14 @@
+{
+  "firmware": {
+    "version": "2.0.5",
+    "url": "https://github.com/sqret86/xiaozhi_C3/releases/download/v2.0.5/xiaozhi.bin",
+    "force": 0
+  },
+  "mqtt": {
+    "endpoint": "wss://api.tenclass.net/xiaozhi/mqtt/"
+  },
+  "websocket": {
+    "url": "wss://api.tenclass.net/xiaozhi/v1/"
+  }
+}
+
