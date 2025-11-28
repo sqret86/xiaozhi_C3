@@ -425,8 +425,8 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     config.url = firmware_url.c_str();
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.timeout_ms = 30000;
-    config.buffer_size = 1024;           // 增加接收缓冲区大小
-    config.buffer_size_tx = 1024;        // 增加发送缓冲区大小
+    config.buffer_size = 1024;           // HTTP 接收缓冲区
+    config.buffer_size_tx = 1024;        // HTTP 发送缓冲区
     
     client = esp_http_client_init(&config);
     if (!client) {
